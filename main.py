@@ -1,22 +1,29 @@
 import argparse
 import os
+import matplotlib.pyplot as plt
 
 import pandas as pd
 import torch
 import torch.optim as optim
-from thop import profile, clever_format
+import torch.nn as nn
+from torchvision import transforms
+#from thop import profile, clever_format
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 import utils
+from get_dataloader import get_dataloader
 from model import Model
 
+import neptune
+
+torch.backends.cudnn.benchmark=True
 
 # train for one epoch to learn unique features
-def train(net, data_loader, train_optimizer):
+def train(net, data_loader, train_optimizer, opt, exp):
     net.train()
     total_loss, total_num, train_bar = 0.0, 0, tqdm(data_loader)
-    for pos_1, pos_2, target in train_bar:
+    for pos_1, pos_2, target, _, _ in train_bar:
         pos_1, pos_2 = pos_1.cuda(non_blocking=True), pos_2.cuda(non_blocking=True)
         feature_1, out_1 = net(pos_1)
         feature_2, out_2 = net(pos_2)
@@ -24,9 +31,9 @@ def train(net, data_loader, train_optimizer):
         out = torch.cat([out_1, out_2], dim=0)
         # [2*B, 2*B]
         sim_matrix = torch.exp(torch.mm(out, out.t().contiguous()) / temperature)
-        mask = (torch.ones_like(sim_matrix) - torch.eye(2 * batch_size, device=sim_matrix.device)).bool()
+        mask = (torch.ones_like(sim_matrix) - torch.eye(2 * opt.batch_size_multiGPU, device=sim_matrix.device)).bool()
         # [2*B, 2*B-1]
-        sim_matrix = sim_matrix.masked_select(mask).view(2 * batch_size, -1)
+        sim_matrix = sim_matrix.masked_select(mask).view(2 * opt.batch_size_multiGPU, -1)
 
         # compute loss
         pos_sim = torch.exp(torch.sum(out_1 * out_2, dim=-1) / temperature)
@@ -37,9 +44,10 @@ def train(net, data_loader, train_optimizer):
         loss.backward()
         train_optimizer.step()
 
-        total_num += batch_size
-        total_loss += loss.item() * batch_size
+        total_num += opt.batch_size_multiGPU
+        total_loss += loss.item() * opt.batch_size_multiGPU
         train_bar.set_description('Train Epoch: [{}/{}] Loss: {:.4f}'.format(epoch, epochs, total_loss / total_num))
+        exp.log_metric('loss', total_loss / total_num)
 
     return total_loss / total_num
 
@@ -81,14 +89,29 @@ def test(net, memory_data_loader, test_data_loader):
 
             pred_labels = pred_scores.argsort(dim=-1, descending=True)
             total_top1 += torch.sum((pred_labels[:, :1] == target.unsqueeze(dim=-1)).any(dim=-1).float()).item()
-            total_top5 += torch.sum((pred_labels[:, :5] == target.unsqueeze(dim=-1)).any(dim=-1).float()).item()
-            test_bar.set_description('Test Epoch: [{}/{}] Acc@1:{:.2f}% Acc@5:{:.2f}%'
-                                     .format(epoch, epochs, total_top1 / total_num * 100, total_top5 / total_num * 100))
+            test_bar.set_description(f'Test Epoch: [{epoch}/{epochs}] Acc@1:{total_top1 / total_num * 100:.2f}%')
 
-    return total_top1 / total_num * 100, total_top5 / total_num * 100
+    return total_top1 / total_num * 100
 
+
+def distribute_over_GPUs(opt, model):
+    ## distribute over GPUs
+    if opt.device.type != "cpu":
+        model = nn.DataParallel(model)
+        num_GPU = torch.cuda.device_count()
+        opt.batch_size_multiGPU = opt.batch_size * num_GPU
+    else:
+        model = nn.DataParallel(model)
+        opt.batch_size_multiGPU = opt.batch_size
+
+    model = model.to(opt.device)
+    print("Let's use", num_GPU, "GPUs!")
+
+    return model, num_GPU
 
 if __name__ == '__main__':
+    neptune.init('k-stacke/simclr')
+
     parser = argparse.ArgumentParser(description='Train SimCLR')
     parser.add_argument('--feature_dim', default=128, type=int, help='Feature dim for latent vector')
     parser.add_argument('--temperature', default=0.5, type=float, help='Temperature used in softmax')
@@ -96,43 +119,75 @@ if __name__ == '__main__':
     parser.add_argument('--batch_size', default=512, type=int, help='Number of images in each mini-batch')
     parser.add_argument('--epochs', default=500, type=int, help='Number of sweeps over the dataset to train')
 
-    # args parse
-    args = parser.parse_args()
-    feature_dim, temperature, k = args.feature_dim, args.temperature, args.k
-    batch_size, epochs = args.batch_size, args.epochs
+    parser.add_argument('--dataset', default='cam17', type=str, help='Dataset')
+    parser.add_argument('--data_input_dir', type=str, help='Base folder for images')
+    parser.add_argument('--training_data_csv', default=None, type=str, help='Path to file to use to read training data')
+    parser.add_argument('--test_data_csv', default=None, type=str, help='Path to file to use to read val data')
+    parser.add_argument('--save_dir', type=str, help='Path to save log')
+    parser.add_argument('--save_after', type=int, default=1, help='Save model after every Nth epoch, default every epoch')
+    parser.add_argument("--validate", action="store_true", default=False,help="Boolean to decide whether to split train dataset into train/val and plot validation loss",)
+    parser.add_argument("--balanced_validation_set", action="store_true", default=False, help="Equal size of classes in validation set",)
 
-    # data prepare
-    train_data = utils.CIFAR10Pair(root='data', train=True, transform=utils.train_transform, download=True)
-    train_loader = DataLoader(train_data, batch_size=batch_size, shuffle=True, num_workers=16, pin_memory=True,
-                              drop_last=True)
-    memory_data = utils.CIFAR10Pair(root='data', train=True, transform=utils.test_transform, download=True)
-    memory_loader = DataLoader(memory_data, batch_size=batch_size, shuffle=False, num_workers=16, pin_memory=True)
-    test_data = utils.CIFAR10Pair(root='data', train=False, transform=utils.test_transform, download=True)
-    test_loader = DataLoader(test_data, batch_size=batch_size, shuffle=False, num_workers=16, pin_memory=True)
+    # args parse
+    opt = parser.parse_args()
+    feature_dim, temperature, k = opt.feature_dim, opt.temperature, opt.k
+    batch_size, epochs = opt.batch_size, opt.epochs
+
+
+    opt.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+    print('Device:', opt.device)
+
+
+    if not os.path.exists(opt.save_dir):
+        os.makedirs(opt.save_dir, exist_ok=True)
+    opt.log_path = opt.save_dir
+
+    exp = neptune.create_experiment(name='test', params=opt.__dict__, tags=['simclr'])
 
     # model setup and optimizer config
-    model = Model(feature_dim).cuda()
-    flops, params = profile(model, inputs=(torch.randn(1, 3, 32, 32).cuda(),))
-    flops, params = clever_format([flops, params])
-    print('# Model Params: {} FLOPs: {}'.format(params, flops))
+    model = Model(feature_dim)
+    model, num_GPU = distribute_over_GPUs(opt, model)
+
     optimizer = optim.Adam(model.parameters(), lr=1e-3, weight_decay=1e-6)
-    c = len(memory_data.classes)
+    c = 2
+
+    train_loader, train_dataset, supervised_loader, supervised_dataset, test_loader, test_dataset = get_dataloader(opt)
+    
+    # Example batch
+    trans = transforms.ToPILImage()
+    for batch in train_loader:
+        for i in range(batch[0].shape[0]):
+            plt.figure(figsize=(10, 10))
+            plt.subplot(1, 2, 1)
+            plt.xticks([])
+            plt.yticks([])
+            plt.grid(False)
+            plt.imshow(trans(batch[0][i,...]).convert("RGB"))#, cmap=plt.cm.binary)
+            plt.subplot(1, 2, 2)
+            plt.xticks([])
+            plt.yticks([])
+            plt.grid(False)
+            plt.imshow(trans(batch[1][i,...]).convert("RGB"))
+
+            exp.log_image('example_images', plt.gcf())
+        break
 
     # training loop
-    results = {'train_loss': [], 'test_acc@1': [], 'test_acc@5': []}
-    save_name_pre = '{}_{}_{}_{}_{}'.format(feature_dim, temperature, k, batch_size, epochs)
-    if not os.path.exists('results'):
-        os.mkdir('results')
+    results = {'train_loss': [], 'test_acc': []}
+    save_name_pre = f'{feature_dim}_{temperature}_{k}_{batch_size}_{epochs}'
     best_acc = 0.0
     for epoch in range(1, epochs + 1):
-        train_loss = train(model, train_loader, optimizer)
+        train_loss = train(model, train_loader, optimizer, opt, exp)
         results['train_loss'].append(train_loss)
-        test_acc_1, test_acc_5 = test(model, memory_loader, test_loader)
-        results['test_acc@1'].append(test_acc_1)
-        results['test_acc@5'].append(test_acc_5)
+        exp.log_metric('epoch_loss', train_loss)
+
+        test_acc= test(model, memory_loader, test_loader)
+        results['test_acc'].append(test_acc)
+        exp.log_metric('epoch_accuracy', test_acc)
         # save statistics
         data_frame = pd.DataFrame(data=results, index=range(1, epoch + 1))
-        data_frame.to_csv('results/{}_statistics.csv'.format(save_name_pre), index_label='epoch')
-        if test_acc_1 > best_acc:
-            best_acc = test_acc_1
-            torch.save(model.state_dict(), 'results/{}_model.pth'.format(save_name_pre))
+        data_frame.to_csv(f'{opt.save_dir}/{save_name_pre}_statistics.csv', index_label='epoch')
+
+        ## Save model after 10 epochs
+        if epoch % 10 != 0:
+            torch.save(model.state_dict(), f'{opt.log_path}/{save_name_pre}_model_{epoch}.pth')
