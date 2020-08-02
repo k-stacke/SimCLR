@@ -16,7 +16,7 @@ import neptune
 
 def get_dataloader(opt):
     if opt.dataset == 'cam17':
-        train_loader, train_dataset, supervised_loader, supervised_dataset, test_loader, test_dataset = get_camelyon_dataloader(
+        train_loader, train_dataset, val_loader, val_dataset, test_loader, test_dataset = get_camelyon_dataloader(
             opt
         )
     else:
@@ -25,8 +25,8 @@ def get_dataloader(opt):
     return (
         train_loader,
         train_dataset,
-        supervised_loader,
-        supervised_dataset,
+        val_loader,
+        val_dataset,
         test_loader,
         test_dataset,
     )
@@ -36,18 +36,22 @@ def get_transforms(eval=False, aug=None):
 
     if eval:
         test_transform = transforms.Compose([
+            transforms.Resize(32),
             transforms.ToTensor(),
-            transforms.Normalize([0.4914, 0.4822, 0.4465], [0.2023, 0.1994, 0.2010])]
+            transforms.Normalize([0.4914, 0.4822, 0.4465], [0.2023, 0.1994, 0.2010])
+            ]
         )
         return test_transform
 
     train_transform = transforms.Compose([
-        transforms.RandomResizedCrop(32),
+        transforms.Resize(32),
+        transforms.RandomResizedCrop(32, (0.8,1)),
         transforms.RandomHorizontalFlip(p=0.5),
         transforms.RandomApply([transforms.ColorJitter(0.4, 0.4, 0.4, 0.1)], p=0.8),
         transforms.RandomGrayscale(p=0.2),
         transforms.ToTensor(),
-        transforms.Normalize([0.4914, 0.4822, 0.4465], [0.2023, 0.1994, 0.2010])])
+        transforms.Normalize([0.4914, 0.4822, 0.4465], [0.2023, 0.1994, 0.2010])
+        ])
     return train_transform
 
     # trans = []
@@ -131,14 +135,21 @@ def get_camelyon_dataloader(opt):
         else:
             raise Exception(f'Cannot find file: {opt.training_data_csv}')
 
+        if os.path.isfile(opt.validation_data_csv):
+            print("reading csv file: ", opt.validation_data_csv)
+            val_df = pd.read_csv(opt.validation_data_csv)
+        else:
+            raise Exception(f'Cannot find file: {opt.test_data_csv}')
+
         if os.path.isfile(opt.test_data_csv):
             print("reading csv file: ", opt.test_data_csv)
-            val_df = pd.read_csv(opt.test_data_csv)
+            test_df = pd.read_csv(opt.test_data_csv)
         else:
             raise Exception(f'Cannot find file: {opt.test_data_csv}')
 
         train_df = clean_data(opt.data_input_dir, train_df)
         val_df = clean_data(opt.data_input_dir, val_df)
+        test_df = clean_data(opt.data_input_dir, test_df)
     else:
         file_ = f"{opt.data_input_dir}/camelyon17_patches_unbiased.csv"
         #file_ = f"{opt.data_input_dir}/lnco_camelyon_patches.csv"
@@ -177,34 +188,49 @@ def get_camelyon_dataloader(opt):
         samples_to_take = val_df.groupby('label').size().min()
         val_df = pd.concat([val_df[val_df.label == label].sample(samples_to_take) for label in val_df.label.unique()])
 
+        print('Use uniform test set')
+        samples_to_take = test_df.groupby('label').size().min()
+        test_df = pd.concat([test_df[test_df.label == label].sample(samples_to_take) for label in test_df.label.unique()])
+
     print("training patches: ", train_df.groupby('label').size())
-    print("test patches: ", val_df.groupby('label').size())
+    print("Validation patches: ", val_df.groupby('label').size())
+    print("Test patches: ", test_df.groupby('label').size())
 
     train_dataset = ImagePatchesDataset(train_df, image_dir=base_folder, transform=transform_train)
-    test_dataset = ImagePatchesDataset(val_df, image_dir=base_folder, transform=transform_valid)
+    val_dataset = ImagePatchesDataset(val_df, image_dir=base_folder, transform=transform_valid)
+    test_dataset = ImagePatchesDataset(test_df, image_dir=base_folder, transform=transform_valid)
 
     # Weighted sampler to handle class imbalance
-    train_sampler = get_weighted_sampler(train_dataset, num_samples=len(train_dataset))
+    print('Weighted validation sampler')
+    val_sampler = get_weighted_sampler(val_dataset, num_samples=len(val_dataset))
     #train_sampler = get_lnco_weighted_sampler(train_dataset, num_samples=len(train_dataset))
 
     # default dataset loaders
 
-    num_workers = 0
+    num_workers = 16
     train_loader = torch.utils.data.DataLoader(
-        train_dataset, batch_size=opt.batch_size_multiGPU, sampler=train_sampler, num_workers=num_workers, drop_last=True,
-    )
-
-    unsupervised_dataset = train_dataset # Don't weight unsupervised training set
-    unsupervised_loader = torch.utils.data.DataLoader(
-        unsupervised_dataset,
+        train_dataset, 
         batch_size=opt.batch_size_multiGPU,
         shuffle=True,
+        num_workers=num_workers, 
+        drop_last=True,
+    )
+
+
+    val_loader = torch.utils.data.DataLoader(
+        val_dataset,
+        batch_size=opt.batch_size_multiGPU//2,
+        sampler=val_sampler,
         num_workers=num_workers,
         drop_last=True,
     )
 
     test_loader = torch.utils.data.DataLoader(
-        test_dataset, batch_size=opt.batch_size_multiGPU, shuffle=False, num_workers=num_workers, drop_last=True,
+        test_dataset, 
+        batch_size=opt.batch_size_multiGPU//2, 
+        shuffle=False, 
+        num_workers=num_workers, 
+        drop_last=True,
     )
 
     # create train/val split
@@ -261,10 +287,10 @@ def get_camelyon_dataloader(opt):
         print("Use (train+val) / test split")
 
     return (
-        unsupervised_loader,
-        unsupervised_dataset,
         train_loader,
         train_dataset,
+        val_loader,
+        val_dataset,
         test_loader,
         test_dataset,
     )
@@ -298,6 +324,8 @@ class ImagePatchesDataset(Dataset):
         self.transform = transform
 
         self.label_enum = {'TUMOR': 1, 'NONTUMOR': 0}
+
+        self.targets = list(dataframe.label.apply(lambda x: self.label_enum[x]))
 
     def __len__(self):
         return len(self.dataframe.index)

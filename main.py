@@ -1,6 +1,7 @@
 import argparse
 import os
 import matplotlib.pyplot as plt
+import numpy as np
 
 import pandas as pd
 import torch
@@ -53,21 +54,21 @@ def train(net, data_loader, train_optimizer, opt, exp):
 
 
 # test for one epoch, use weighted knn to find the most similar images' label to assign the test image
-def test(net, memory_data_loader, test_data_loader):
+def test(net, val_data_loader, test_data_loader):
     net.eval()
     total_top1, total_top5, total_num, feature_bank = 0.0, 0.0, 0, []
     with torch.no_grad():
         # generate feature bank
-        for data, _, target in tqdm(memory_data_loader, desc='Feature extracting'):
+        for data, _, target, _, _ in tqdm(val_data_loader, desc='Feature extracting'):
             feature, out = net(data.cuda(non_blocking=True))
             feature_bank.append(feature)
         # [D, N]
         feature_bank = torch.cat(feature_bank, dim=0).t().contiguous()
         # [N]
-        feature_labels = torch.tensor(memory_data_loader.dataset.targets, device=feature_bank.device)
+        feature_labels = torch.tensor(val_data_loader.dataset.targets, device=feature_bank.device)
         # loop test data to predict the label by weighted knn search
         test_bar = tqdm(test_data_loader)
-        for data, _, target in test_bar:
+        for data, _, target, _, _ in test_bar:
             data, target = data.cuda(non_blocking=True), target.cuda(non_blocking=True)
             feature, out = net(data)
 
@@ -122,7 +123,8 @@ if __name__ == '__main__':
     parser.add_argument('--dataset', default='cam17', type=str, help='Dataset')
     parser.add_argument('--data_input_dir', type=str, help='Base folder for images')
     parser.add_argument('--training_data_csv', default=None, type=str, help='Path to file to use to read training data')
-    parser.add_argument('--test_data_csv', default=None, type=str, help='Path to file to use to read val data')
+    parser.add_argument('--validation_data_csv', default=None, type=str, help='Path to file to use to read validation data')
+    parser.add_argument('--test_data_csv', default=None, type=str, help='Path to file to use to read test data')
     parser.add_argument('--save_dir', type=str, help='Path to save log')
     parser.add_argument('--save_after', type=int, default=1, help='Save model after every Nth epoch, default every epoch')
     parser.add_argument("--validate", action="store_true", default=False,help="Boolean to decide whether to split train dataset into train/val and plot validation loss",)
@@ -142,7 +144,7 @@ if __name__ == '__main__':
         os.makedirs(opt.save_dir, exist_ok=True)
     opt.log_path = opt.save_dir
 
-    exp = neptune.create_experiment(name='test', params=opt.__dict__, tags=['simclr'])
+    exp = neptune.create_experiment(name='SimCLR', params=opt.__dict__, tags=['simclr'])
 
     # model setup and optimizer config
     model = Model(feature_dim)
@@ -151,37 +153,41 @@ if __name__ == '__main__':
     optimizer = optim.Adam(model.parameters(), lr=1e-3, weight_decay=1e-6)
     c = 2
 
-    train_loader, train_dataset, supervised_loader, supervised_dataset, test_loader, test_dataset = get_dataloader(opt)
-    
-    # Example batch
-    trans = transforms.ToPILImage()
-    for batch in train_loader:
-        for i in range(batch[0].shape[0]):
-            plt.figure(figsize=(10, 10))
-            plt.subplot(1, 2, 1)
-            plt.xticks([])
-            plt.yticks([])
-            plt.grid(False)
-            plt.imshow(trans(batch[0][i,...]).convert("RGB"))#, cmap=plt.cm.binary)
-            plt.subplot(1, 2, 2)
-            plt.xticks([])
-            plt.yticks([])
-            plt.grid(False)
-            plt.imshow(trans(batch[1][i,...]).convert("RGB"))
+    train_loader, train_dataset, val_loader, val_dataset, test_loader, test_dataset = get_dataloader(opt)
+   
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=len(train_loader), eta_min=0, last_epoch=-1)
 
-            exp.log_image('example_images', plt.gcf())
-        break
+    ## Example batch
+    #trans = transforms.ToPILImage()
+    #for batch in train_loader:
+    #    for i in range(batch[0].shape[0]):
+    #        plt.figure(figsize=(10, 10))
+    #        plt.subplot(1, 2, 1)
+    #        plt.xticks([])
+    #        plt.yticks([])
+    #        plt.grid(False)
+    #        plt.imshow(trans(batch[0][i,...]).convert("RGB"))#, cmap=plt.cm.binary)
+    #        plt.subplot(1, 2, 2)
+    #        plt.xticks([])
+    #        plt.yticks([])
+    #        plt.grid(False)
+    #        plt.imshow(trans(batch[1][i,...]).convert("RGB"))
+
+    #        exp.log_image('example_images', plt.gcf())
+    #    break
 
     # training loop
     results = {'train_loss': [], 'test_acc': []}
     save_name_pre = f'{feature_dim}_{temperature}_{k}_{batch_size}_{epochs}'
     best_acc = 0.0
     for epoch in range(1, epochs + 1):
+        exp.log_metric('learning_rate', scheduler.get_lr()[0])
         train_loss = train(model, train_loader, optimizer, opt, exp)
+        scheduler.step()
         results['train_loss'].append(train_loss)
         exp.log_metric('epoch_loss', train_loss)
 
-        test_acc= test(model, memory_loader, test_loader)
+        test_acc= test(model, val_loader, test_loader)
         results['test_acc'].append(test_acc)
         exp.log_metric('epoch_accuracy', test_acc)
         # save statistics
