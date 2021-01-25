@@ -115,10 +115,6 @@ def get_dataframes(opt):
     else:
         raise Exception(f'Cannot find file: {opt.test_data_csv}')
 
-    train_df = train_df.sample(100)
-
-    test_df = test_df.sample(100)
-
     train_df = clean_data(opt.data_input_dir, train_df)
     test_df = clean_data(opt.data_input_dir, test_df)
 

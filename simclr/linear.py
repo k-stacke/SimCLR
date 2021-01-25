@@ -63,7 +63,7 @@ def train_val(net, data_loader, train_optimizer, exp):
             all_patches.extend(patch_id)
             all_slides.extend(slide_id)
 
-            probs = torch.nn.functional.softmax(prediction.data, dim=1).cpu().numpy()
+            probs = torch.nn.functional.softmax(out.data, dim=1).cpu().numpy()
             all_outputs0.extend(probs[:, 0])
             all_outputs1.extend(probs[:, 1])
 
@@ -80,7 +80,6 @@ def train_val(net, data_loader, train_optimizer, exp):
                 'prediction': all_preds,
                 'slide_id': all_slides,
                 'patch_id': all_patches,
-                'request_id': all_request_ids,
                 'probabilities_0': all_outputs0,
                 'probabilities_1': all_outputs1,
             })

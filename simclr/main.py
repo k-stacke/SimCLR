@@ -189,6 +189,6 @@ if __name__ == '__main__':
         # Delete old ones, save latest, keep every 10th
         if (epoch - 1) % 10 != 0:
             try:
-                os.remove(f'{opt.log_path}/{save_name_pre}_model_{epoch - self.num_models_to_keep}.pth')
+                os.remove(f'{opt.log_path}/{save_name_pre}_model_{epoch - 1}.pth')
             except:
                 print("not enough models there yet, nothing to delete")
