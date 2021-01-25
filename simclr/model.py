@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.cuda import amp
 from torchvision.models import resnet50
 
 
@@ -22,6 +23,7 @@ class Model(nn.Module):
                                nn.ReLU(inplace=True),
                                nn.Linear(512, feature_dim, bias=True))
 
+    @amp.autocast()
     def forward(self, x):
         x = self.f(x)
         feature = torch.flatten(x, start_dim=1)

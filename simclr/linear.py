@@ -9,7 +9,7 @@ from torch.utils.data import DataLoader
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 from tqdm import tqdm
 
-import utils
+from simclr.utils import distribute_over_GPUs 
 from model import Model
 from get_dataloader import get_dataloader
 
@@ -92,7 +92,7 @@ def train_val(net, data_loader, train_optimizer, exp):
 
 
 if __name__ == '__main__':
-    neptune.init('k-stacke/sandbox')
+    neptune.init('k-stacke/self-supervised')
 
     parser = argparse.ArgumentParser(description='Linear Evaluation')
     parser.add_argument('--model_path', type=str, default='results/128_0.5_200_512_500_model.pth',
@@ -133,12 +133,12 @@ if __name__ == '__main__':
     opt.log_path = opt.save_dir
 
     exp = neptune.create_experiment(name='SimCLR linear classification', params=opt.__dict__,
-                                    tags=['cpc', 'linear'])
+                                    tags=['simclr', 'linear'])
 
     model_path, batch_size, epochs = opt.model_path, opt.batch_size, opt.epochs
 
     model = Net(opt)
-    model, num_GPU = utils.distribute_over_GPUs(opt, model)
+    model, num_GPU = distribute_over_GPUs(opt, model)
 
     train_loader, train_data, val_loader, val_data, test_loader, test_data = get_dataloader(opt)
 
@@ -172,11 +172,11 @@ if __name__ == '__main__':
         data_frame = pd.DataFrame(data=results, index=range(1, epoch + 1))
         data_frame.to_csv(f'{opt.log_path}/linear_statistics.csv', index_label='epoch')
 
-        if model_to_save == 'best' and val_acc > best_acc:
+        if opt.model_to_save == 'best' and val_acc > best_acc:
             # Save only the if the accuracy exceeds previous accuracy
             best_acc = val_acc
             torch.save(model.state_dict(), f'{opt.log_path}/linear_model.pth')
-        elif model_to_save == 'latest':
+        elif opt.model_to_save == 'latest':
             # Save latest model
             best_acc = val_acc
             torch.save(model.state_dict(), f'{opt.log_path}/linear_model.pth')

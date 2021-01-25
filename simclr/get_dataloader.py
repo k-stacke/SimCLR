@@ -115,10 +115,6 @@ def get_dataframes(opt):
     else:
         raise Exception(f'Cannot find file: {opt.test_data_csv}')
 
-    train_df = clean_data(opt.data_input_dir, train_df)
-    test_df = clean_data(opt.data_input_dir, test_df)
-
-
     if opt.trainingset_split:
         # Split train_df into train and val
         slide_ids = train_df.slide_id.unique()
@@ -154,6 +150,14 @@ def get_dataframes(opt):
         print('Use uniform test set')
         samples_to_take = test_df.groupby('label').size().min()
         test_df = pd.concat([test_df[test_df.label == label].sample(samples_to_take) for label in test_df.label.unique()])
+
+    train_df = train_df.sample(2000)
+    val_df = val_df.sample(100)
+    test_df = test_df.sample(1000)
+
+    train_df = clean_data(opt.data_input_dir, train_df)
+    val_df = clean_data(opt.data_input_dir, val_df)
+    test_df = clean_data(opt.data_input_dir, test_df)
 
     return train_df, val_df, test_df
 
