@@ -6,7 +6,7 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader
-from torch.optim.lr_scheduler import ReduceLROnPlateau
+from torch.optim.lr_scheduler import ReduceLROnPlateau, CosineAnnealingLR
 from tqdm import tqdm
 
 from simclr.utils import distribute_over_GPUs 
@@ -147,7 +147,8 @@ if __name__ == '__main__':
             param.requires_grad = False
 
     optimizer = optim.Adam(model.module.fc.parameters(), lr=opt.lr, weight_decay=1e-6)
-    scheduler = ReduceLROnPlateau(optimizer, 'min', patience=5, min_lr=1e-6)
+    scheduler = CosineAnnealingLR(optimizer, opt.epochs)
+    #scheduler = ReduceLROnPlateau(optimizer, 'min', patience=5, min_lr=1e-6)
 
     loss_criterion = nn.CrossEntropyLoss()
     results = {'train_loss': [], 'train_acc': [],
@@ -166,7 +167,7 @@ if __name__ == '__main__':
         results['val_acc'].append(val_acc)
         exp.log_metric('val_acc', val_acc)
 
-        scheduler.step(val_loss)
+        scheduler.step()
 
         # save statistics
         data_frame = pd.DataFrame(data=results, index=range(1, epoch + 1))

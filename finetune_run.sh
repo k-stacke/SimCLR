@@ -5,7 +5,7 @@ DTime=$( date +%Y%m%d_%H%M )
 FOLDER=$1
 MODEL=$2
 
-OUTPUT_FOLDER='/proj/karst/results/simclr/'$FOLDER'/linear_classification_'$MODEL''
+OUTPUT_FOLDER='/proj/karst/results/simclr/'$FOLDER'/finetune_linear_classification_'$MODEL''
 #OUTPUT_FOLDER='/proj/karst/results/simclr/'$DTime'_simclr'
 
 python simclr/linear.py \
@@ -18,4 +18,5 @@ python simclr/linear.py \
 --lr 0.01 \
 --training_data_csv '/proj/karst/camelyon16/pcam/validation/pcam_patches_valid.csv' \
 --test_data_csv '/proj/karst/camelyon16/pcam/test/pcam_patches_test.csv' \
---trainingset_split 0.75
+--trainingset_split 0.75 \
+--finetune
