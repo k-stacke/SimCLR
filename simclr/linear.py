@@ -1,5 +1,7 @@
 import argparse
 import os
+import random 
+import numpy as np
 
 import pandas as pd
 import torch
@@ -14,6 +16,8 @@ from model import Model
 from get_dataloader import get_dataloader
 
 import neptune
+
+torch.backends.cudnn.benchmark=True
 
 class Net(nn.Module):
     def __init__(self, opt):
@@ -39,14 +43,15 @@ class Net(nn.Module):
 # train or test for one epoch
 def train_val(net, data_loader, train_optimizer, exp):
     is_train = train_optimizer is not None
-    net.train() if is_train else net.eval()
+    net.eval() # train only the last layers. 
+    #net.train() if is_train else net.eval()
 
     total_loss, total_correct, total_num, data_bar = 0.0, 0.0, 0, tqdm(data_loader)
 
     all_preds, all_labels, all_slides, all_outputs0, all_outputs1, all_patches  = [], [], [], [], [], []
 
     with (torch.enable_grad() if is_train else torch.no_grad()):
-        for data, _, target, patch_id, slide_id in data_bar:
+        for data, target, patch_id, slide_id in data_bar:
             data, target = data.cuda(non_blocking=True), target.cuda(non_blocking=True)
             out = net(data)
             loss = loss_criterion(out, target)
@@ -118,6 +123,7 @@ if __name__ == '__main__':
     parser.add_argument("--finetune", action="store_true", default=False, help="If true, pre-trained model weights will not be frozen.")
     parser.add_argument('--lr', type=float, default=1e-3, help='Learning rate')
     parser.add_argument("--model_to_save", choices=['best', 'latest'], default='latest', type=str, help='Save latest or best (based on val acc)')
+    parser.add_argument('--seed', type=int, default=44, help='seed')
 
     opt = parser.parse_args()
     opt.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
@@ -135,6 +141,13 @@ if __name__ == '__main__':
     exp = neptune.create_experiment(name='SimCLR linear classification', params=opt.__dict__,
                                     tags=['simclr', 'linear'])
 
+    seed = opt.seed
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+
     model_path, batch_size, epochs = opt.model_path, opt.batch_size, opt.epochs
 
     model = Net(opt)
@@ -145,6 +158,11 @@ if __name__ == '__main__':
     if not opt.finetune:
         for param in model.module.f.parameters():
             param.requires_grad = False
+
+    for name, param in model.named_parameters():
+        print('Requires grad: ')
+        if param.requires_grad:
+            print(name)
 
     optimizer = optim.Adam(model.module.fc.parameters(), lr=opt.lr, weight_decay=1e-6)
     scheduler = CosineAnnealingLR(optimizer, opt.epochs)

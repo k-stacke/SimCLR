@@ -151,9 +151,9 @@ def get_dataframes(opt):
         samples_to_take = test_df.groupby('label').size().min()
         test_df = pd.concat([test_df[test_df.label == label].sample(samples_to_take) for label in test_df.label.unique()])
 
-    train_df = train_df.sample(2000)
-    val_df = val_df.sample(100)
-    test_df = test_df.sample(1000)
+    #train_df = train_df.sample(2000)
+    #val_df = val_df.sample(100)
+    #test_df = test_df.sample(1000)
 
     train_df = clean_data(opt.data_input_dir, train_df)
     val_df = clean_data(opt.data_input_dir, val_df)
@@ -169,7 +169,7 @@ def get_camelyon_dataloader(opt):
 
     aug = {
         "cam": {
-            "resize": 224,
+            "resize": None,
             "randcrop": 224,
             "flip": True,
             "color_jitter": 0.8,
@@ -183,8 +183,8 @@ def get_camelyon_dataloader(opt):
             "bw_std": [0.2570],
         } ,
         "cam_supervised": {
-            "resize": 224,
-            "randcrop": None,
+            "resize": None,
+            "randcrop": 224,
             "flip": True,
             "color_jitter": 0.8,
             "color_value": 0.2,
@@ -212,9 +212,9 @@ def get_camelyon_dataloader(opt):
     val_df.to_csv(f'{opt.log_path}/val_patches.csv', index=False)
 
     if opt.dataset == 'cam':
-        train_dataset = ImagePatchesDataset(train_df, image_dir=base_folder, transform=transform_train)
-        val_dataset = ImagePatchesDataset(val_df, image_dir=base_folder, transform=transform_valid)
-        test_dataset = ImagePatchesDataset(test_df, image_dir=base_folder, transform=transform_valid)
+        train_dataset = ImagePatchesDataset(train_df, image_dir=base_folder, transform=transform_train, supervised=opt.train_supervised)
+        val_dataset = ImagePatchesDataset(val_df, image_dir=base_folder, transform=transform_valid, supervised=opt.train_supervised)
+        test_dataset = ImagePatchesDataset(test_df, image_dir=base_folder, transform=transform_valid, supervised=opt.train_supervised)
     elif opt.dataset == 'patchcam':
         train_dataset = H5Dataset(train_df, image_dir=base_folder, transform=transform_train)
         val_dataset = H5Dataset(val_df, image_dir=base_folder, transform=transform_valid)
@@ -272,10 +272,11 @@ def get_camelyon_dataloader(opt):
 
 
 class ImagePatchesDataset(Dataset):
-    def __init__(self, dataframe, image_dir, transform=None):
+    def __init__(self, dataframe, image_dir, transform=None, supervised=False):
         self.dataframe = dataframe
         self.image_dir = image_dir
         self.transform = transform
+        self.supervised = supervised
 
         self.label_enum = {'TUMOR': 1, 'NONTUMOR': 0}
 
@@ -295,12 +296,17 @@ class ImagePatchesDataset(Dataset):
 
         if self.transform is not None:
             pos_1 = self.transform(image)
-            pos_2 = self.transform(image)
+            if self.supervised:
+                pos_2 = None
+            else:
+                pos_2 = self.transform(image)
         else:
             raise NotImplementedError
 
         label = self.label_enum[row.label]
-
+        
+        if self.supervised:
+            return pos_1, label, row.patch_id, row.slide_id
         return pos_1, pos_2, label, row.patch_id, row.slide_id
 
 
