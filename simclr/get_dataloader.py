@@ -307,7 +307,7 @@ def get_multidata_dataloader(opt):
     train_loader = torch.utils.data.DataLoader(train_dataset, num_workers=opt.num_workers,
                                         pin_memory=True, drop_last=True,
                                         shuffle=True,
-                                        batch_size=opt.batch_size)
+                                        batch_size=opt.batch_size_multiGPU)
 
     return (
         train_loader,
@@ -384,6 +384,7 @@ class LmdbDataset(torch.utils.data.Dataset):
         self.cursor = self.txn.cursor()
 
         self.length = self.txn.stat()['entries']
+        print('Generating keys to lmdb dataset, this takes a while...')
         self.keys = [key for key, _ in self.txn.cursor()] # not so fast...
 
     def close(self):

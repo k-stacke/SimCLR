@@ -31,7 +31,7 @@ def train(net, data_loader, train_optimizer, scaler, opt, exp):
     total_loss, total_num, train_bar = 0.0, 0, tqdm(data_loader)
     for data in train_bar:
         pos_1, pos_2 = data[0].cuda(non_blocking=True), data[1].cuda(non_blocking=True)
-
+        
         with amp.autocast():
             feature_1, out_1 = net(pos_1)
             feature_2, out_2 = net(pos_2)
