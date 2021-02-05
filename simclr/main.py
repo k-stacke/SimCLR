@@ -29,8 +29,8 @@ torch.backends.cudnn.benchmark=True
 def train(net, data_loader, train_optimizer, scaler, opt, exp):
     net.train()
     total_loss, total_num, train_bar = 0.0, 0, tqdm(data_loader)
-    for pos_1, pos_2, target, _, _ in train_bar:
-        pos_1, pos_2 = pos_1.cuda(non_blocking=True), pos_2.cuda(non_blocking=True)
+    for data in train_bar:
+        pos_1, pos_2 = data[0].cuda(non_blocking=True), data[1].cuda(non_blocking=True)
 
         with amp.autocast():
             feature_1, out_1 = net(pos_1)
@@ -129,7 +129,7 @@ if __name__ == '__main__':
     group_validationset.add_argument('--validation_data_csv', type=str, help='Path to file to use to read validation data')
     group_validationset.add_argument('--trainingset_split', type=float, help='If not none, training csv with be split in train/val. Value between 0-1')
 
-    parser.add_argument('--dataset', choices=['cam', 'patchcam'], default='cam', type=str, help='Dataset')
+    parser.add_argument('--dataset', choices=['cam', 'patchcam', 'multidata'], default='cam', type=str, help='Dataset')
     parser.add_argument('--data_input_dir', type=str, help='Base folder for images (or h5 file)')
     parser.add_argument('--save_dir', type=str, help='Path to save log')
     parser.add_argument('--save_after', type=int, default=1, help='Save model after every Nth epoch, default every epoch')
@@ -206,7 +206,7 @@ if __name__ == '__main__':
     model, num_GPU = distribute_over_GPUs(opt, model)
 
 
-    train_loader, train_dataset, val_loader, val_dataset, test_loader, test_dataset = get_dataloader(opt)
+    train_loader, train_dataset, _, _, _, _ = get_dataloader(opt)
 
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=len(train_loader), eta_min=0, last_epoch=-1)
 

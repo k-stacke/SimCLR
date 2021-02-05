@@ -3,6 +3,7 @@ import random
 import numpy as np
 import pandas as pd
 from PIL import Image
+import lmdb
 
 import torch
 import torchvision
@@ -19,6 +20,8 @@ def get_dataloader(opt):
         train_loader, train_dataset, val_loader, val_dataset, test_loader, test_dataset = get_camelyon_dataloader(
             opt
         )
+    elif opt.dataset == 'multidata':
+        train_loader, train_dataset, val_loader, val_dataset, test_loader, test_dataset = get_multidata_dataloader(opt)
     else:
         raise Exception("Invalid option")
 
@@ -268,6 +271,53 @@ def get_camelyon_dataloader(opt):
         test_dataset,
     )
 
+def get_multidata_dataloader(opt):
+    '''
+    Loads pathologydataset from lmdb files, performing augmentaions.
+    Only supporting pretraining, as no labels are available
+    args:
+        opt (dict): Program/commandline arguments.
+    Returns:
+        dataloaders (): pretraindataloaders.
+    '''
+
+    # Base train and test augmentaions
+    aug = {
+        "multidata": {
+            "resize": None,
+            "randcrop": None,
+            "flip": True,
+            "color_jitter": 0.8,
+            "color_value": 0.2,
+            "grayscale": opt.grayscale,
+            "gaussian_blur": True,
+            "rotation": True,
+            "mean": [0.4914, 0.4822, 0.4465],  # values for train+unsupervised combined
+            "std": [0.2023, 0.1994, 0.2010],
+            "bw_mean": [0.4120],  # values for train+unsupervised combined
+            "bw_std": [0.2570],
+        },
+    }
+
+    transform_train = transforms.Compose(get_transforms(eval=False, aug=aug['multidata']))
+
+    train_dataset = LmdbDataset(lmdb_path=opt.data_input_dir,
+                        transform=transform_train)
+
+    train_loader = torch.utils.data.DataLoader(train_dataset, num_workers=opt.num_workers,
+                                        pin_memory=True, drop_last=True,
+                                        shuffle=True,
+                                        batch_size=opt.batch_size)
+
+    return (
+        train_loader,
+        train_dataset,
+        None,
+        None,
+        None,
+        None,
+    )
+
 
 class ImagePatchesDataset(Dataset):
     def __init__(self, dataframe, image_dir, transform=None, supervised=False):
@@ -307,6 +357,55 @@ class ImagePatchesDataset(Dataset):
             return pos_1, label, row.patch_id, row.slide_id
         return pos_1, pos_2, label, row.patch_id, row.slide_id
 
+
+class LmdbDataset(torch.utils.data.Dataset):
+    def __init__(self, lmdb_path, transform):
+        self.cursor_access = False
+        self.lmdb_path = lmdb_path
+        self.image_dimensions = (224, 224, 3) # size of files in lmdb
+        self.transform = transform
+
+        self._init_db()
+
+    def __len__(self):
+        return self.length
+
+    def _init_db(self):
+        num_readers = 999
+
+        self.env = lmdb.open(self.lmdb_path,
+                             max_readers=num_readers,
+                             readonly=1,
+                             lock=0,
+                             readahead=0,
+                             meminit=0)
+
+        self.txn = self.env.begin(write=False)
+        self.cursor = self.txn.cursor()
+
+        self.length = self.txn.stat()['entries']
+        self.keys = [key for key, _ in self.txn.cursor()] # not so fast...
+
+    def close(self):
+        self.env.close()
+
+    def __getitem__(self, index):
+        ' cursor in lmdb is much faster than random access '
+        if self.cursor_access:
+            if not self.cursor.next():
+                self.cursor.first()
+            image = self.cursor.value()
+        else:
+            image = self.txn.get(self.keys[index])
+
+        image = np.frombuffer(image, dtype=np.uint8)
+        image = image.reshape(self.image_dimensions)
+        image = Image.fromarray(image)
+
+        pos_1 = self.transform(image)
+        pos_2 = self.transform(image)
+
+        return pos_1, pos_2
 
 class H5Dataset(Dataset):
     def __init__(self, dataframe, image_dir, transform=None):
