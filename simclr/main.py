@@ -16,7 +16,7 @@ from tqdm import tqdm
 
 # from torchlars import LARS
 
-from simclr.utils import distribute_over_GPUs
+from simclr.utils import distribute_over_GPUs, reload_weights
 from simclr.get_dataloader import get_dataloader
 from simclr.model import Model
 from simclr.optimisers import LARS
@@ -42,7 +42,7 @@ def train(net, data_loader, train_optimizer, scaler, opt, exp):
             mask = (torch.ones_like(sim_matrix) - torch.eye(2 * opt.batch_size_multiGPU, device=sim_matrix.device)).bool()
             # [2*B, 2*B-1]
             sim_matrix = sim_matrix.masked_select(mask).view(2 * opt.batch_size_multiGPU, -1)
-    
+
             # compute loss
             pos_sim = torch.exp(torch.sum(out_1 * out_2, dim=-1) / temperature)
             # [2*B]
@@ -58,7 +58,8 @@ def train(net, data_loader, train_optimizer, scaler, opt, exp):
         total_num += opt.batch_size_multiGPU
         total_loss += loss.item() * opt.batch_size_multiGPU
         train_bar.set_description('Train Epoch: [{}/{}] Loss: {:.4f}'.format(epoch, epochs, total_loss / total_num))
-        exp.log_metric('loss', total_loss / total_num)
+        if exp is not None:
+            exp.log_metric('loss', total_loss / total_num)
 
     return total_loss / total_num
 
@@ -116,6 +117,11 @@ if __name__ == '__main__':
     parser.add_argument('--epochs', default=500, type=int, help='Number of sweeps over the dataset to train')
     parser.add_argument('--lr', default=1e-3, type=float, help='Learning rate')
 
+    parser.add_argument('--load_checkpoint_dir', default=None,
+                    help='Path to Load Pre-trained Model From.')
+    parser.add_argument('--start_epoch', default=0, type=int,
+                    help='Epoch to start from when cont. training (affects optimizer)')
+
     parser.add_argument('--training_data_csv', required=True, type=str, help='Path to file to use to read training data')
     parser.add_argument('--test_data_csv', required=True, type=str, help='Path to file to use to read test data')
     # For validation set, need to specify either csv or train/val split ratio
@@ -152,6 +158,7 @@ if __name__ == '__main__':
     opt.log_path = opt.save_dir
 
     exp = neptune.create_experiment(name='SimCLR', params=opt.__dict__, tags=['simclr'])
+    #exp = None
 
     # Write the parameters used to run experiment to file
     with open(f'{opt.log_path}/metadata_train.txt', 'w') as metadata_file:
@@ -161,8 +168,6 @@ if __name__ == '__main__':
     scaler = amp.GradScaler()
 
     model = Model(feature_dim)
-    model, num_GPU = distribute_over_GPUs(opt, model)
-
     if opt.optimizer == 'adam':
         optimizer = optim.Adam(model.parameters(), lr=opt.lr, weight_decay=1e-6)
     elif opt.optimizer == 'lars':
@@ -191,6 +196,16 @@ if __name__ == '__main__':
         # optimizer = LARS(optimizer=base_optimizer, eps=1e-8, trust_coef=0.001)
     # c = 2
 
+
+    if opt.load_checkpoint_dir:
+        print('Loading model from: ', opt.load_checkpoint_dir)
+        model, optimizer = reload_weights(
+            opt, model, optimizer
+        )
+
+    model, num_GPU = distribute_over_GPUs(opt, model)
+
+
     train_loader, train_dataset, val_loader, val_dataset, test_loader, test_dataset = get_dataloader(opt)
 
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=len(train_loader), eta_min=0, last_epoch=-1)
@@ -200,12 +215,14 @@ if __name__ == '__main__':
     save_name_pre = f'{feature_dim}_{temperature}_{k}_{batch_size}_{epochs}'
     best_acc = 0.0
     for epoch in range(1, epochs + 1):
-        exp.log_metric('learning_rate', scheduler.get_last_lr()[0])
+        if exp is not None:
+            exp.log_metric('learning_rate', scheduler.get_last_lr()[0])
 
         train_loss = train(model, train_loader, optimizer, scaler, opt, exp)
         scheduler.step()
         results['train_loss'].append(train_loss)
-        exp.log_metric('epoch_loss', train_loss)
+        if exp is not None:
+            exp.log_metric('epoch_loss', train_loss)
 
         #test_acc= test(model, val_loader, test_loader)
         #results['test_acc'].append(test_acc)
@@ -216,7 +233,13 @@ if __name__ == '__main__':
 
         ## Save model
         if epoch % opt.save_after == 0:
-            torch.save(model.module.state_dict(), f'{opt.log_path}/{save_name_pre}_model_{epoch}.pth')
+            state = {
+                #'args': args,
+                'model': model.module.state_dict(),
+                'optimiser': optimizer.state_dict(),
+                'epoch': epoch,
+            }
+            torch.save(state, f'{opt.log_path}/{save_name_pre}_model_{epoch}.pth')
         # Delete old ones, save latest, keep every 10th
         if (epoch - 1) % 10 != 0:
             try:

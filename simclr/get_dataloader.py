@@ -5,7 +5,6 @@ import pandas as pd
 from PIL import Image
 
 import torch
-import torchvision.transforms as transforms
 import torchvision
 from torchvision.transforms import transforms
 from torch.utils.data import Dataset
@@ -138,7 +137,6 @@ def get_dataframes(opt):
         if os.path.isfile(opt.validation_data_csv):
             print("reading csv file: ", opt.validation_data_csv)
             val_df = pd.read_csv(opt.validation_data_csv)
-            val_df = val_df.sample(100)
         else:
             raise Exception(f'Cannot find file: {opt.test_data_csv}')
 
@@ -151,7 +149,7 @@ def get_dataframes(opt):
         samples_to_take = test_df.groupby('label').size().min()
         test_df = pd.concat([test_df[test_df.label == label].sample(samples_to_take) for label in test_df.label.unique()])
 
-    #train_df = train_df.sample(2000)
+    #train_df = train_df.sample(1000)
     #val_df = val_df.sample(100)
     #test_df = test_df.sample(1000)
 
@@ -304,7 +302,7 @@ class ImagePatchesDataset(Dataset):
             raise NotImplementedError
 
         label = self.label_enum[row.label]
-        
+
         if self.supervised:
             return pos_1, label, row.patch_id, row.slide_id
         return pos_1, pos_2, label, row.patch_id, row.slide_id

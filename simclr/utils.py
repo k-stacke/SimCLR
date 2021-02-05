@@ -23,6 +23,27 @@ class CIFAR10Pair(CIFAR10):
 
         return pos_1, pos_2, target
 
+def reload_weights(args, model, optimizer):
+    # Load the pretrained model
+    checkpoint = torch.load(args.load_checkpoint_dir, map_location="cpu")
+
+    ## reload weights for training of the linear classifier
+    if 'model' in checkpoint.keys():
+        model.load_state_dict(checkpoint['model'])
+    else:
+        model.load_state_dict(checkpoint)
+    ## reload weights and optimizers for continuing training
+    if args.start_epoch > 0:
+        print("Continuing training from epoch ", args.start_epoch)
+
+        try:
+            optimizer.load_state_dict(checkpoint['optimizer'])
+        except KeyError:
+            raise KeyError('Sry, no optimizer saved. Set start_epoch=0 to start from pretrained weights')
+
+    return model, optimizer
+
+
 def distribute_over_GPUs(opt, model):
     ## distribute over GPUs
     if opt.device.type != "cpu":
