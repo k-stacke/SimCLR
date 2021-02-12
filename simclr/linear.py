@@ -1,6 +1,6 @@
 import argparse
 import os
-import random 
+import random
 import numpy as np
 
 import pandas as pd
@@ -11,9 +11,9 @@ from torch.utils.data import DataLoader
 from torch.optim.lr_scheduler import ReduceLROnPlateau, CosineAnnealingLR
 from tqdm import tqdm
 
-from simclr.utils import distribute_over_GPUs 
-from model import Model
-from get_dataloader import get_dataloader
+from simclr.utils import distribute_over_GPUs
+from simclr.model import Model, Identity
+from simclr.get_dataloader import get_dataloader
 
 import neptune
 
@@ -29,8 +29,14 @@ class Net(nn.Module):
         # print(base_model)
         # encoder
         self.f = base_model.f
+
+        if opt.layer_out > -1:
+            for i in range(opt.layer_out+1, 5):
+                setattr(self.f, f'layer{i}', Identity())
+
+
         # classifier
-        self.fc = nn.Linear(2048, opt.num_classes, bias=True)
+        self.fc = nn.Linear(opt.output_dims, opt.num_classes, bias=True)
         # self.load_state_dict(torch.load(pretrained_path, map_location='cuda'), strict=False)
 
     def forward(self, x):
@@ -43,7 +49,7 @@ class Net(nn.Module):
 # train or test for one epoch
 def train_val(net, data_loader, train_optimizer, exp):
     is_train = train_optimizer is not None
-    net.eval() # train only the last layers. 
+    net.eval() # train only the last layers.
     #net.train() if is_train else net.eval()
 
     total_loss, total_correct, total_num, data_bar = 0.0, 0.0, 0, tqdm(data_loader)
@@ -125,8 +131,17 @@ if __name__ == '__main__':
     parser.add_argument("--model_to_save", choices=['best', 'latest'], default='latest', type=str, help='Save latest or best (based on val acc)')
     parser.add_argument('--seed', type=int, default=44, help='seed')
 
+    parser.add_argument('--layer_out', type=int, default=-1, help='Use output from other than final layer. [1-4]')
+
+
     opt = parser.parse_args()
     opt.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+
+    opt.output_dims = 2048
+    if opt.layer_out > -1:
+       opt.output_dims = min(2**(8+opt.layer_out-1), 2048)
+
+
     print('Device:', opt.device)
     is_windows = True if os.name == 'nt' else False
     opt.num_workers = 0 if is_windows else 16
