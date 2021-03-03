@@ -10,7 +10,7 @@ OUTPUT_FOLDER='/proj/karst/results/simclr/'$FOLDER'/linear_classification_'$MODE
 #OUTPUT_FOLDER='/proj/karst/results/simclr/'$DTime'_simclr'
 
 python simclr/linear.py \
---model_path '/proj/karst/results/simclr/'$FOLDER'/128_0.5_200_24_200_model_'$MODEL'.pth' \
+--model_path '/proj/karst/results/simclr/'$FOLDER'/128_0.5_200_256_100_model_'$MODEL'.pth' \
 --batch_size 128 \
 --epochs 20 \
 --data_input_dir '/proj/karst/camelyon16/pcam' \

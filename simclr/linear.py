@@ -49,8 +49,8 @@ class Net(nn.Module):
 # train or test for one epoch
 def train_val(net, data_loader, train_optimizer, exp):
     is_train = train_optimizer is not None
-    net.eval() # train only the last layers.
-    #net.train() if is_train else net.eval()
+    #net.eval() # train only the last layers.
+    net.train() if is_train else net.eval()
 
     total_loss, total_correct, total_num, data_bar = 0.0, 0.0, 0, tqdm(data_loader)
 
@@ -179,7 +179,10 @@ if __name__ == '__main__':
         if param.requires_grad:
             print(name)
 
-    optimizer = optim.Adam(model.module.fc.parameters(), lr=opt.lr, weight_decay=1e-6)
+    if opt.finetune:
+        optimizer = optim.Adam(model.parameters(), lr=opt.lr, weight_decay=1e-6)
+    else:
+        optimizer = optim.Adam(model.module.fc.parameters(), lr=opt.lr, weight_decay=1e-6)
     scheduler = CosineAnnealingLR(optimizer, opt.epochs)
     #scheduler = ReduceLROnPlateau(optimizer, 'min', patience=5, min_lr=1e-6)
 

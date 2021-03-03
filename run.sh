@@ -2,11 +2,11 @@
 
 DTime=$( date +%Y%m%d_%H%M )
 
-OUTPUT_FOLDER='/proj/karst/results/simclr/'$DTime'_simclr'
+OUTPUT_FOLDER='/proj/karst/results/simclr/'$DTime'_imagenetpretrained'
 
 python simclr/main.py \
 --batch_size 256 \
---epochs 200 \
+--epochs 100 \
 --data_input_dir '/proj/karst/camelyon16' \
 --save_dir $OUTPUT_FOLDER \
 --save_after 1 \
